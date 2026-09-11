@@ -125,7 +125,8 @@ _cmd_picker_select() {
     (( maxcmd < 20 )) && maxcmd=20
     (( cmdw > maxcmd )) && cmdw=$maxcmd
 
-    local drawn=0 key k2 k3 cmd row line
+    local drawn=0 key k2 k3 params cmd row line
+    _cmd_picker_accept=0                   # 1 = run the command, 0 = only insert
     printf '\e[?25l' > /dev/tty            # hide cursor
 
     while :; do
@@ -136,7 +137,7 @@ _cmd_picker_select() {
         drawn=0
 
         {
-            printf '\e[2K\e[2m  ↑/↓ move · ⏎ select · esc cancel'
+            printf '\e[2K\e[2m  ↑/↓ move · ⏎ run · ⌥⏎ insert · esc cancel'
             (( total > view )) && printf '   (%d/%d)' $(( sel + 1 )) $total
             printf '\e[0m\n'
             (( drawn++ ))
@@ -156,7 +157,8 @@ _cmd_picker_select() {
 
         IFS= read -rs -k 1 key < /dev/tty || { REPLY=-1; break; }
         case $key in
-            $'\n'|$'\r')  REPLY=$(( total - 1 - sel )); break ;;
+            $'\n'|$'\r')  _cmd_picker_accept=1
+                          REPLY=$(( total - 1 - sel )); break ;;
             'k')          (( sel > 0 )) && (( sel-- )) ;;
             'j')          (( sel < total - 1 )) && (( sel++ )) ;;
             'q'|$'\003')  REPLY=-1; break ;;                 # q / ctrl-c
@@ -166,10 +168,16 @@ _cmd_picker_select() {
                 if ! IFS= read -rs -k 1 -t 0.05 k2 < /dev/tty; then
                     REPLY=-1; break                           # bare ESC
                 fi
+                # ALT+Return as "ESC then CR" -> insert without running
+                if [[ $k2 == $'\r' || $k2 == $'\n' ]]; then
+                    REPLY=$(( total - 1 - sel )); break
+                fi
                 if [[ $k2 == '[' || $k2 == 'O' ]]; then
                     IFS= read -rs -k 1 -t 0.2 k3 < /dev/tty || continue
-                    # swallow modifier params of sequences like ESC [ 1;3 A
+                    # collect modifier params of sequences like ESC [ 1;3 A
+                    params=""
                     while [[ $k3 == [0-9\;] ]]; do
+                        params+=$k3
                         IFS= read -rs -k 1 -t 0.2 k3 < /dev/tty || break
                     done
                     case $k3 in
@@ -179,6 +187,12 @@ _cmd_picker_select() {
                         B) (( sel < total - 1 )) && (( sel++ )) ;;
                         H) sel=0 ;;
                         F) sel=$(( total - 1 )) ;;
+                        # ALT+Return reported by modifyOtherKeys (ESC [ 27;3;13 ~)
+                        # or by the kitty keyboard protocol (ESC [ 13;3 u)
+                        '~'|'u')
+                           if [[ $params == (27\;*\;13|13\;*) ]]; then
+                               REPLY=$(( total - 1 - sel )); break
+                           fi ;;
                     esac
                 fi
                 ;;
@@ -212,6 +226,11 @@ _pick_command() {          # opened from _cycle_commands_down (ALT+DOWN)
         _commands_index=$picked
         BUFFER="${_commands[picked + 1]}"
         CURSOR=${#BUFFER}
+        if (( _cmd_picker_accept )); then
+            _commands_index=${#_commands[@]}   # selection ends the cycle
+            zle accept-line
+            return
+        fi
     fi
     zle redisplay
 }
