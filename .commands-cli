@@ -47,14 +47,18 @@ _load_commands() {
     _cmd_log "load_commands: count=${#_commands[@]} index=$_commands_index"
 }
 
+# zsh's own stat builtin: no fork per keypress, and unlike `stat(1)` the syntax
+# is the same on macOS (BSD) and Linux (GNU coreutils)
+zmodload -F zsh/stat b:zstat 2>/dev/null
+
 _commands_mtime=0
 _maybe_reload_commands() {
-    local mtime
+    local -a st
     if [[ -f "$_commands_file" ]]; then
-        mtime=$(stat -f %m "$_commands_file")
-        if [[ "$mtime" != "$_commands_mtime" ]]; then
+        zstat -A st +mtime "$_commands_file" 2>/dev/null || return
+        if [[ "$st[1]" != "$_commands_mtime" ]]; then
             _load_commands
-            _commands_mtime="$mtime"
+            _commands_mtime="$st[1]"
             _commands_index=${#_commands[@]}
         fi
     fi
