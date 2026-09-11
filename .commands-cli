@@ -60,6 +60,13 @@ _maybe_reload_commands() {
     fi
 }
 
+# Refreshes the list and succeeds only when there is something to offer.
+_have_commands() {
+    _maybe_reload_commands
+    (( ${#_commands[@]} == 0 )) && _load_commands
+    (( ${#_commands[@]} > 0 ))
+}
+
 # zsh arrays are 1-based; _commands_index keeps bash-style 0-based semantics,
 # so the element is _commands[_commands_index + 1]
 _cycle_commands() {        # ALT+UP
@@ -205,12 +212,8 @@ _cmd_picker_select() {
 }
 
 _pick_command() {          # opened from _cycle_commands_down (ALT+DOWN)
-    _maybe_reload_commands
-    (( ${#_commands[@]} == 0 )) && _load_commands
-    if (( ${#_commands[@]} == 0 )); then
-        zle -M "no commands in $_commands_file"
-        return
-    fi
+    # with nothing to pick from the picker stays closed and says nothing
+    _have_commands || return 1
 
     # start on the currently cycled command, translated into the reversed view
     local start=0
@@ -242,8 +245,8 @@ _down_or_pick() {          # DOWN
     _maybe_reload_commands
     if (( _commands_index < ${#_commands[@]} )); then
         _cycle_commands_down
-    elif [[ -z "$BUFFER" ]] && (( HISTNO == HISTCMD )); then
-        _pick_command
+    elif [[ -z "$BUFFER" ]] && (( HISTNO == HISTCMD )) && _pick_command; then
+        :   # the picker handled the key
     else
         zle .down-line-or-history
     fi
