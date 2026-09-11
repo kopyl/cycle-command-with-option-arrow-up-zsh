@@ -1,0 +1,70 @@
+# --- ALT+Up / ALT+Down: cycle through lines of a local .commands file (zsh ZLE) ---
+_commands_file=".commands"
+_commands=()
+_commands_index=0
+_cmd_log() { echo "[$(date '+%H:%M:%S')] $1" >> ~/.command-logs; }
+
+_load_commands() {
+    _commands=()
+    _commands_index=0
+    if [[ -f "$_commands_file" ]]; then
+        local line
+        # `|| [[ -n "$line" ]]` picks up a last line that has no trailing newline
+        while IFS= read -r line || [[ -n "$line" ]]; do
+            [[ -n "$line" && "$line" != \#* ]] && _commands+=("$line")
+        done < "$_commands_file"
+    fi
+    _cmd_log "load_commands: count=${#_commands[@]} index=$_commands_index"
+}
+
+_commands_mtime=0
+_maybe_reload_commands() {
+    local mtime
+    if [[ -f "$_commands_file" ]]; then
+        mtime=$(stat -f %m "$_commands_file")
+        if [[ "$mtime" != "$_commands_mtime" ]]; then
+            _load_commands
+            _commands_mtime="$mtime"
+            _commands_index=${#_commands[@]}
+        fi
+    fi
+}
+
+# zsh arrays are 1-based; _commands_index keeps bash-style 0-based semantics,
+# so the element is _commands[_commands_index + 1]
+_cycle_commands() {        # ALT+UP
+    _maybe_reload_commands
+    if [[ ${#_commands[@]} -eq 0 ]]; then
+        _load_commands
+        _commands_index=${#_commands[@]}
+    fi
+    if [[ -z "$BUFFER" && $_commands_index -lt ${#_commands[@]} ]]; then
+        _commands_index=${#_commands[@]}
+    fi
+    if [[ $_commands_index -gt 0 ]]; then
+        _commands_index=$(( _commands_index - 1 ))
+        BUFFER="${_commands[$(( _commands_index + 1 ))]}"
+        CURSOR=${#BUFFER}
+    fi
+}
+
+_cycle_commands_down() {   # ALT+DOWN
+    _maybe_reload_commands
+    if [[ ${#_commands[@]} -eq 0 ]]; then
+        return
+    fi
+    if [[ $_commands_index -lt $(( ${#_commands[@]} - 1 )) ]]; then
+        _commands_index=$(( _commands_index + 1 ))
+        BUFFER="${_commands[$(( _commands_index + 1 ))]}"
+        CURSOR=${#BUFFER}
+    else
+        _commands_index=${#_commands[@]}
+        BUFFER=""
+        CURSOR=0
+    fi
+}
+
+zle -N _cycle_commands
+zle -N _cycle_commands_down
+bindkey '^[[1;3A' _cycle_commands
+bindkey '^[[1;3B' _cycle_commands_down
