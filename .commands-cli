@@ -1,6 +1,6 @@
 # --- ALT+Up / ALT+Down: cycle through lines of a local .commands file (zsh ZLE) ---
-# --- ALT+Down with nothing left to cycle down to: pick a command from a
-#     two-column table (command | description) ---
+# --- Down (on an untouched prompt) or ALT+Down with nothing left to cycle
+#     down to: pick a command from a two-column table (command | description) ---
 #
 # .commands format:
 #   ccusage --version                 # ccusage version
@@ -219,10 +219,27 @@ _pick_command() {          # opened from _cycle_commands_down (ALT+DOWN)
     zle redisplay
 }
 
+# Plain DOWN: open the picker only on an untouched prompt — empty buffer and
+# not browsing shell history (HISTNO == HISTCMD means we are on the fresh line).
+# Mid .commands cycle it keeps cycling; anything else falls through to zsh.
+_down_or_pick() {          # DOWN
+    _maybe_reload_commands
+    if (( _commands_index < ${#_commands[@]} )); then
+        _cycle_commands_down
+    elif [[ -z "$BUFFER" ]] && (( HISTNO == HISTCMD )); then
+        _pick_command
+    else
+        zle .down-line-or-history
+    fi
+}
+
 zle -N _cycle_commands
 zle -N _cycle_commands_down
 zle -N _pick_command
+zle -N _down_or_pick
 bindkey '^[[1;3A' _cycle_commands
 bindkey '^[[1;3B' _cycle_commands_down
+bindkey '^[[B'    _down_or_pick     # plain Down (application mode: ^[OB)
+bindkey '^[OB'    _down_or_pick
 
 # the picker has no binding of its own — ALT+Down opens it when not cycling
