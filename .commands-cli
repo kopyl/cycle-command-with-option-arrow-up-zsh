@@ -1,6 +1,6 @@
 # --- ALT+Up / ALT+Down: cycle through lines of a local .commands file (zsh ZLE) ---
 # --- Down (on an untouched prompt) or ALT+Down with nothing left to cycle
-#     down to: pick a command from a two-column table (command | description) ---
+#     down to: pick a command from a list ---
 #
 # .commands format:
 #   ccusage --version                 # ccusage version
@@ -121,13 +121,11 @@ _cmd_picker_select() {
         w=${#_commands[i]}
         (( w > cmdw )) && cmdw=$w
     done
-    local maxcmd=$(( cols / 2 ))
+    local maxcmd=$(( cols - 3 ))
     (( maxcmd < 20 )) && maxcmd=20
     (( cmdw > maxcmd )) && cmdw=$maxcmd
-    local descw=$(( cols - cmdw - 5 ))
-    (( descw < 0 )) && descw=0
 
-    local drawn=0 key k2 k3 cmd desc row line
+    local drawn=0 key k2 k3 cmd row line
     printf '\e[?25l' > /dev/tty            # hide cursor
 
     while :; do
@@ -143,15 +141,14 @@ _cmd_picker_select() {
             printf '\e[0m\n'
             (( drawn++ ))
 
+            # descriptions are still parsed into _commands_desc, just not shown
             for (( i = top; i < top + view; i++ )); do
                 cmd=${_commands[total - i]}
-                desc=${_commands_desc[total - i]}
                 (( ${#cmd} > cmdw )) && cmd="${cmd[1,cmdw - 1]}…"
-                (( descw > 0 && ${#desc} > descw )) && desc="${desc[1,descw - 1]}…"
                 if (( i == sel )); then
-                    printf '\e[2K\e[7m %-*s  %-*s \e[0m\n' $cmdw "$cmd" $descw "$desc"
+                    printf '\e[2K\e[7m %-*s \e[0m\n' $cmdw "$cmd"
                 else
-                    printf '\e[2K \e[1m%-*s\e[0m  \e[2m%s\e[0m\n' $cmdw "$cmd" "$desc"
+                    printf '\e[2K \e[1m%-*s\e[0m\n' $cmdw "$cmd"
                 fi
                 (( drawn++ ))
             done
