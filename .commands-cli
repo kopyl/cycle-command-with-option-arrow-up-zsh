@@ -1,17 +1,47 @@
 # --- ALT+Up / ALT+Down: cycle through lines of a local .commands file (zsh ZLE) ---
+# --- ALT+Down with nothing left to cycle down to: pick a command from a
+#     two-column table (command | description) ---
+#
+# .commands format:
+#   ccusage --version                 # ccusage version
+#   npm install -g ccusage@latest     # install latest npm packages
+# Everything after the first " #" is the description and is never inserted
+# into the command line. Lines starting with # are ignored entirely.
+
 _commands_file=".commands"
 _commands=()
+_commands_desc=()
 _commands_index=0
 _cmd_log() { echo "[$(date '+%H:%M:%S')] $1" >> ~/.command-logs; }
 
+_cmd_trim() {  # trims leading/trailing whitespace of $1 into REPLY
+    local s=$1
+    s=${s#"${s%%[!$' \t']*}"}
+    s=${s%"${s##*[!$' \t']}"}
+    REPLY=$s
+}
+
 _load_commands() {
     _commands=()
+    _commands_desc=()
     _commands_index=0
     if [[ -f "$_commands_file" ]]; then
-        local line
+        local line cmd desc
         # `|| [[ -n "$line" ]]` picks up a last line that has no trailing newline
         while IFS= read -r line || [[ -n "$line" ]]; do
-            [[ -n "$line" && "$line" != \#* ]] && _commands+=("$line")
+            _cmd_trim "$line"; line=$REPLY
+            [[ -z "$line" || "$line" == \#* ]] && continue
+            cmd=$line
+            desc=""
+            if [[ "$line" == *" #"* ]]; then
+                cmd=${line%% #*}
+                desc=${line#* #}
+                _cmd_trim "$desc"; desc=$REPLY
+            fi
+            _cmd_trim "$cmd"; cmd=$REPLY
+            [[ -z "$cmd" ]] && continue
+            _commands+=("$cmd")
+            _commands_desc+=("$desc")
         done < "$_commands_file"
     fi
     _cmd_log "load_commands: count=${#_commands[@]} index=$_commands_index"
@@ -53,6 +83,11 @@ _cycle_commands_down() {   # ALT+DOWN
     if [[ ${#_commands[@]} -eq 0 ]]; then
         return
     fi
+    # not in a cycle (nothing left to cycle down to) -> open the picker instead
+    if [[ $_commands_index -ge ${#_commands[@]} ]]; then
+        _pick_command
+        return
+    fi
     if [[ $_commands_index -lt $(( ${#_commands[@]} - 1 )) ]]; then
         _commands_index=$(( _commands_index + 1 ))
         BUFFER="${_commands[$(( _commands_index + 1 ))]}"
@@ -64,7 +99,130 @@ _cycle_commands_down() {   # ALT+DOWN
     fi
 }
 
+# ---------------------------------------------------------------------------
+# Picker
+# ---------------------------------------------------------------------------
+
+# Renders the table and returns the selected index (0-based) in $REPLY, or -1.
+# The table is shown newest-first (last line of .commands at the top), so the
+# visual row $sel maps to the underlying index $(( total - 1 - sel )).
+# Draws to and reads from /dev/tty so it is safe inside a ZLE widget.
+_cmd_picker_select() {
+    local total=${#_commands[@]}
+    local cols=${COLUMNS:-80} lines=${LINES:-24}
+    local sel=${1:-0} top=0
+    local view=$(( lines - 4 ))
+    (( view > total )) && view=$total
+    (( view < 1 )) && view=1
+
+    # column widths
+    local i w cmdw=0
+    for (( i = 1; i <= total; i++ )); do
+        w=${#_commands[i]}
+        (( w > cmdw )) && cmdw=$w
+    done
+    local maxcmd=$(( cols / 2 ))
+    (( maxcmd < 20 )) && maxcmd=20
+    (( cmdw > maxcmd )) && cmdw=$maxcmd
+    local descw=$(( cols - cmdw - 5 ))
+    (( descw < 0 )) && descw=0
+
+    local drawn=0 key k2 k3 cmd desc row line
+    printf '\e[?25l' > /dev/tty            # hide cursor
+
+    while :; do
+        (( sel < top )) && top=$sel
+        (( sel > top + view - 1 )) && top=$(( sel - view + 1 ))
+
+        (( drawn > 0 )) && printf '\e[%dA' $drawn > /dev/tty
+        drawn=0
+
+        {
+            printf '\e[2K\e[2m  ↑/↓ move · ⏎ select · esc cancel'
+            (( total > view )) && printf '   (%d/%d)' $(( sel + 1 )) $total
+            printf '\e[0m\n'
+            (( drawn++ ))
+
+            for (( i = top; i < top + view; i++ )); do
+                cmd=${_commands[total - i]}
+                desc=${_commands_desc[total - i]}
+                (( ${#cmd} > cmdw )) && cmd="${cmd[1,cmdw - 1]}…"
+                (( descw > 0 && ${#desc} > descw )) && desc="${desc[1,descw - 1]}…"
+                if (( i == sel )); then
+                    printf '\e[2K\e[7m %-*s  %-*s \e[0m\n' $cmdw "$cmd" $descw "$desc"
+                else
+                    printf '\e[2K \e[1m%-*s\e[0m  \e[2m%s\e[0m\n' $cmdw "$cmd" "$desc"
+                fi
+                (( drawn++ ))
+            done
+        } > /dev/tty
+
+        IFS= read -rs -k 1 key < /dev/tty || { REPLY=-1; break; }
+        case $key in
+            $'\n'|$'\r')  REPLY=$(( total - 1 - sel )); break ;;
+            'k')          (( sel > 0 )) && (( sel-- )) ;;
+            'j')          (( sel < total - 1 )) && (( sel++ )) ;;
+            'q'|$'\003')  REPLY=-1; break ;;                 # q / ctrl-c
+            $'\020')      (( sel > 0 )) && (( sel-- )) ;;     # ctrl-p
+            $'\016')      (( sel < total - 1 )) && (( sel++ )) ;; # ctrl-n
+            $'\e')
+                if ! IFS= read -rs -k 1 -t 0.05 k2 < /dev/tty; then
+                    REPLY=-1; break                           # bare ESC
+                fi
+                if [[ $k2 == '[' || $k2 == 'O' ]]; then
+                    IFS= read -rs -k 1 -t 0.2 k3 < /dev/tty || continue
+                    # swallow modifier params of sequences like ESC [ 1;3 A
+                    while [[ $k3 == [0-9\;] ]]; do
+                        IFS= read -rs -k 1 -t 0.2 k3 < /dev/tty || break
+                    done
+                    case $k3 in
+                        A) # Up on the top row leaves the picker
+                           if (( sel == 0 )); then REPLY=-1; break; fi
+                           (( sel-- )) ;;
+                        B) (( sel < total - 1 )) && (( sel++ )) ;;
+                        H) sel=0 ;;
+                        F) sel=$(( total - 1 )) ;;
+                    esac
+                fi
+                ;;
+        esac
+    done
+
+    # erase the table
+    (( drawn > 0 )) && printf '\e[%dA' $drawn > /dev/tty
+    printf '\e[J\e[?25h' > /dev/tty        # clear below + show cursor
+}
+
+_pick_command() {          # opened from _cycle_commands_down (ALT+DOWN)
+    _maybe_reload_commands
+    (( ${#_commands[@]} == 0 )) && _load_commands
+    if (( ${#_commands[@]} == 0 )); then
+        zle -M "no commands in $_commands_file"
+        return
+    fi
+
+    # start on the currently cycled command, translated into the reversed view
+    local start=0
+    (( _commands_index < ${#_commands[@]} )) && \
+        start=$(( ${#_commands[@]} - 1 - _commands_index ))
+
+    print -rn -- $'\n' > /dev/tty          # room below the prompt
+    _cmd_picker_select $start
+    local picked=$REPLY
+    printf '\e[1A\e[2K' > /dev/tty         # reclaim that line
+
+    if (( picked >= 0 )); then
+        _commands_index=$picked
+        BUFFER="${_commands[picked + 1]}"
+        CURSOR=${#BUFFER}
+    fi
+    zle redisplay
+}
+
 zle -N _cycle_commands
 zle -N _cycle_commands_down
+zle -N _pick_command
 bindkey '^[[1;3A' _cycle_commands
 bindkey '^[[1;3B' _cycle_commands_down
+
+# the picker has no binding of its own — ALT+Down opens it when not cycling
