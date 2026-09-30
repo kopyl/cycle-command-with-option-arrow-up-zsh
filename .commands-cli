@@ -214,170 +214,168 @@ _cmd_picker_select() {
     _cmd_picker_accept=0                   # 1 = run the command, 0 = only insert
     # inside ZLE ctrl-c arrives as SIGINT, not as a \003 key; left alone it
     # aborts the widget mid-draw, leaving the table up and the cursor hidden.
-    # Catch it here instead (the trap ends with the function) and close cleanly.
+    # Catch it instead: the trap returns from this function at once (it is
+    # removed again when the function ends) and the always block cleans up.
     setopt localoptions localtraps
-    local interrupted=0
-    trap 'interrupted=1' INT
+    trap 'REPLY=-1; return' INT
     printf '\e[?25l' > /dev/tty            # hide cursor
 
-    while :; do
-        if (( relevel )); then             # entered or left a group
-            relevel=0
-            _cmd_picker_items $level; items=("${reply[@]}")
-            total=${#items}
-            sel=0 top=0
-            if (( focus )); then
-                i=${items[(ie)$focus]}
-                (( i <= total )) && sel=$(( i - 1 ))
+    {
+        while :; do
+            if (( relevel )); then             # entered or left a group
+                relevel=0
+                _cmd_picker_items $level; items=("${reply[@]}")
+                total=${#items}
+                sel=0 top=0
+                if (( focus )); then
+                    i=${items[(ie)$focus]}
+                    (( i <= total )) && sel=$(( i - 1 ))
+                fi
+                view=$(( lines - 4 ))
+                (( view > total )) && view=$total
+                (( view < 1 )) && view=1
+
+                # column width; a group row adds "📁 " (3 cells) and " ›" (2)
+                cmdw=0
+                for n in $items; do
+                    w=${#_nodes_text[n]}
+                    (( _nodes_cmd[n] == 0 )) && (( w += 5 ))
+                    (( w > cmdw )) && cmdw=$w
+                done
+                maxcmd=$(( cols - 3 ))
+                (( maxcmd < 20 )) && maxcmd=20
+                (( cmdw > maxcmd )) && cmdw=$maxcmd
+
+                crumbs=""
+                for (( n = level; n > 0; n = _nodes_parent[n] )); do
+                    crumbs="${_nodes_text[n]}${crumbs:+ › }$crumbs"
+                done
             fi
-            view=$(( lines - 4 ))
-            (( view > total )) && view=$total
-            (( view < 1 )) && view=1
 
-            # column width; a group row adds "📁 " (3 cells) and " ›" (2)
-            cmdw=0
-            for n in $items; do
-                w=${#_nodes_text[n]}
-                (( _nodes_cmd[n] == 0 )) && (( w += 5 ))
-                (( w > cmdw )) && cmdw=$w
-            done
-            maxcmd=$(( cols - 3 ))
-            (( maxcmd < 20 )) && maxcmd=20
-            (( cmdw > maxcmd )) && cmdw=$maxcmd
+            (( sel < top )) && top=$sel
+            (( sel > top + view - 1 )) && top=$(( sel - view + 1 ))
 
-            crumbs=""
-            for (( n = level; n > 0; n = _nodes_parent[n] )); do
-                crumbs="${_nodes_text[n]}${crumbs:+ › }$crumbs"
-            done
-        fi
+            {
+                # back to the header, clearing leftovers of a longer previous level
+                (( drawn > 0 )) && printf '\e[%dA' $drawn
+                printf '\e[J'
+                drawn=0
 
-        (( sel < top )) && top=$sel
-        (( sel > top + view - 1 )) && top=$(( sel - view + 1 ))
-
-        {
-            # back to the header, clearing leftovers of a longer previous level
-            (( drawn > 0 )) && printf '\e[%dA' $drawn
-            printf '\e[J'
-            drawn=0
-
-            printf '\e[2K'
-            [[ -n $crumbs ]] && printf ' \e[1;34m📁 %s\e[0m' "$crumbs"
-            printf '\e[2m  ↑/↓ move · ⏎ run · → open/show · ⌥⏎ insert · '
-            (( level )) && printf '← back · '
-            printf 'esc cancel'
-            (( total > view )) && printf '   (%d/%d)' $(( sel + 1 )) $total
-            printf '\e[0m\n'
-            (( drawn++ ))
-
-            # descriptions are still parsed into _commands_desc, just not shown
-            for (( i = top; i < top + view; i++ )); do
-                n=${items[i + 1]}
-                name=${_nodes_text[n]}
-                if (( _nodes_cmd[n] )); then
-                    (( ${#name} > cmdw )) && name="${name[1,cmdw - 1]}…"
-                    color=""                            # titles are yellow
-                    [[ ${_nodes_text[n]} != ${_commands[_nodes_cmd[n]]} ]] && color=';33'
-                    if (( i == sel )); then
-                        printf '\e[2K\e[7%sm %-*s \e[0m\n' "${color:+;1$color}" $cmdw "$name"
-                    else
-                        printf '\e[2K \e[1%sm%-*s\e[0m\n' "$color" $cmdw "$name"
-                    fi
-                    if (( i == sel && reveal )); then   # → on a titled command
-                        name=${_commands[_nodes_cmd[n]]}
-                        (( ${#name} > cols - 6 )) && name="${name[1,cols - 7]}…"
-                        printf '\e[2K   \e[2m↳ %s\e[0m\n' "$name"
-                        (( drawn++ ))
-                    fi
-                else
-                    (( ${#name} > cmdw - 5 )) && name="${name[1,cmdw - 6]}…"
-                    if (( i == sel )); then
-                        printf '\e[2K\e[1;7;34m 📁 %-*s \e[0m\n' $(( cmdw - 3 )) "$name ›"
-                    else
-                        printf '\e[2K \e[1;34m📁 %-*s\e[0m\n' $(( cmdw - 3 )) "$name ›"
-                    fi
-                fi
+                printf '\e[2K'
+                [[ -n $crumbs ]] && printf ' \e[1;34m📁 %s\e[0m' "$crumbs"
+                printf '\e[2m  ↑/↓ move · ⏎ run · → open/show · ⌥⏎ insert · '
+                (( level )) && printf '← back · '
+                printf 'esc cancel'
+                (( total > view )) && printf '   (%d/%d)' $(( sel + 1 )) $total
+                printf '\e[0m\n'
                 (( drawn++ ))
-            done
-        } > /dev/tty
 
-        # a blocking read resumes after the trap, so poll to notice ctrl-c
-        until IFS= read -rs -k 1 -t 0.2 key < /dev/tty; do
-            (( interrupted )) && break
+                # descriptions are still parsed into _commands_desc, just not shown
+                for (( i = top; i < top + view; i++ )); do
+                    n=${items[i + 1]}
+                    name=${_nodes_text[n]}
+                    if (( _nodes_cmd[n] )); then
+                        (( ${#name} > cmdw )) && name="${name[1,cmdw - 1]}…"
+                        color=""                            # titles are yellow
+                        [[ ${_nodes_text[n]} != ${_commands[_nodes_cmd[n]]} ]] && color=';33'
+                        if (( i == sel )); then
+                            printf '\e[2K\e[7%sm %-*s \e[0m\n' "${color:+;1$color}" $cmdw "$name"
+                        else
+                            printf '\e[2K \e[1%sm%-*s\e[0m\n' "$color" $cmdw "$name"
+                        fi
+                        if (( i == sel && reveal )); then   # → on a titled command
+                            name=${_commands[_nodes_cmd[n]]}
+                            (( ${#name} > cols - 6 )) && name="${name[1,cols - 7]}…"
+                            printf '\e[2K   \e[2m↳ %s\e[0m\n' "$name"
+                            (( drawn++ ))
+                        fi
+                    else
+                        (( ${#name} > cmdw - 5 )) && name="${name[1,cmdw - 6]}…"
+                        if (( i == sel )); then
+                            printf '\e[2K\e[1;7;34m 📁 %-*s \e[0m\n' $(( cmdw - 3 )) "$name ›"
+                        else
+                            printf '\e[2K \e[1;34m📁 %-*s\e[0m\n' $(( cmdw - 3 )) "$name ›"
+                        fi
+                    fi
+                    (( drawn++ ))
+                done
+            } > /dev/tty
+
+            IFS= read -rs -k 1 key < /dev/tty || { REPLY=-1; break; }
+            act=""
+            case $key in
+                $'\n'|$'\r')  act=run ;;
+                'k'|$'\020')  act=prev ;;              # k / ctrl-p
+                'j'|$'\016')  act=next ;;              # j / ctrl-n
+                'l')          act=open ;;
+                'h')          act=back ;;
+                'q'|$'\003')  act=cancel ;;            # q / ctrl-c
+                $'\e')
+                    if ! IFS= read -rs -k 1 -t 0.05 k2 < /dev/tty; then
+                        act=cancel                            # bare ESC
+                    # ALT+Return as "ESC then CR" -> insert without running
+                    elif [[ $k2 == $'\r' || $k2 == $'\n' ]]; then
+                        act=insert
+                    elif [[ $k2 == '[' || $k2 == 'O' ]]; then
+                        IFS= read -rs -k 1 -t 0.2 k3 < /dev/tty || continue
+                        # collect modifier params of sequences like ESC [ 1;3 A
+                        params=""
+                        while [[ $k3 == [0-9\;] ]]; do
+                            params+=$k3
+                            IFS= read -rs -k 1 -t 0.2 k3 < /dev/tty || break
+                        done
+                        case $k3 in
+                            A) act=up ;;
+                            B) act=next ;;
+                            C) act=open ;;
+                            D) act=back ;;
+                            H) act=home ;;
+                            F) act=end ;;
+                            # ALT+Return reported by modifyOtherKeys (ESC [ 27;3;13 ~)
+                            # or by the kitty keyboard protocol (ESC [ 13;3 u)
+                            '~'|'u') [[ $params == (27\;*\;13|13\;*) ]] && act=insert ;;
+                        esac
+                    fi
+                    ;;
+            esac
+
+            n=${items[sel + 1]}
+            # a revealed command hides again on ← and on any other key
+            if (( reveal )); then
+                reveal=0
+                [[ $act == back ]] && continue
+            fi
+            # on a group, ⏎ / ⌥⏎ open it like →
+            [[ $act == (run|insert) ]] && (( _nodes_cmd[n] == 0 )) && act=open
+            # ← steps out of a group, and only leaves the picker at the top level
+            [[ $act == back ]] && (( level == 0 )) && act=cancel
+            case $act in
+                up)     # Up on the top row of the top level leaves the picker
+                        if (( sel > 0 )); then (( sel-- ))
+                        elif (( level == 0 )); then REPLY=-1; break; fi ;;
+                prev)   (( sel > 0 )) && (( sel-- )) ;;
+                next)   (( sel < total - 1 )) && (( sel++ )) ;;
+                home)   sel=0 ;;
+                end)    sel=$(( total - 1 )) ;;
+                open)   if (( _nodes_cmd[n] == 0 )); then
+                            level=$n focus=0 relevel=1
+                        elif [[ ${_nodes_text[n]} != ${_commands[_nodes_cmd[n]]} ]]; then
+                            reveal=1           # titled: show the real command
+                        fi ;;
+                back)   if (( level )); then   # land on the group we came from
+                            focus=$level level=${_nodes_parent[level]} relevel=1
+                        fi ;;
+                run)    _cmd_picker_accept=1
+                        REPLY=$(( _nodes_cmd[n] - 1 )); break ;;
+                insert) REPLY=$(( _nodes_cmd[n] - 1 )); break ;;
+                cancel) REPLY=-1; break ;;
+            esac
         done
-        (( interrupted )) && { REPLY=-1; break; }         # ctrl-c
-        act=""
-        case $key in
-            $'\n'|$'\r')  act=run ;;
-            'k'|$'\020')  act=prev ;;              # k / ctrl-p
-            'j'|$'\016')  act=next ;;              # j / ctrl-n
-            'l')          act=open ;;
-            'h')          act=back ;;
-            'q'|$'\003')  act=cancel ;;            # q / ctrl-c
-            $'\e')
-                if ! IFS= read -rs -k 1 -t 0.05 k2 < /dev/tty; then
-                    act=cancel                            # bare ESC
-                # ALT+Return as "ESC then CR" -> insert without running
-                elif [[ $k2 == $'\r' || $k2 == $'\n' ]]; then
-                    act=insert
-                elif [[ $k2 == '[' || $k2 == 'O' ]]; then
-                    IFS= read -rs -k 1 -t 0.2 k3 < /dev/tty || continue
-                    # collect modifier params of sequences like ESC [ 1;3 A
-                    params=""
-                    while [[ $k3 == [0-9\;] ]]; do
-                        params+=$k3
-                        IFS= read -rs -k 1 -t 0.2 k3 < /dev/tty || break
-                    done
-                    case $k3 in
-                        A) act=up ;;
-                        B) act=next ;;
-                        C) act=open ;;
-                        D) act=back ;;
-                        H) act=home ;;
-                        F) act=end ;;
-                        # ALT+Return reported by modifyOtherKeys (ESC [ 27;3;13 ~)
-                        # or by the kitty keyboard protocol (ESC [ 13;3 u)
-                        '~'|'u') [[ $params == (27\;*\;13|13\;*) ]] && act=insert ;;
-                    esac
-                fi
-                ;;
-        esac
-
-        n=${items[sel + 1]}
-        # a revealed command hides again on ← and on any other key
-        if (( reveal )); then
-            reveal=0
-            [[ $act == back ]] && continue
-        fi
-        # on a group, ⏎ / ⌥⏎ open it like →
-        [[ $act == (run|insert) ]] && (( _nodes_cmd[n] == 0 )) && act=open
-        # ← steps out of a group, and only leaves the picker at the top level
-        [[ $act == back ]] && (( level == 0 )) && act=cancel
-        case $act in
-            up)     # Up on the top row of the top level leaves the picker
-                    if (( sel > 0 )); then (( sel-- ))
-                    elif (( level == 0 )); then REPLY=-1; break; fi ;;
-            prev)   (( sel > 0 )) && (( sel-- )) ;;
-            next)   (( sel < total - 1 )) && (( sel++ )) ;;
-            home)   sel=0 ;;
-            end)    sel=$(( total - 1 )) ;;
-            open)   if (( _nodes_cmd[n] == 0 )); then
-                        level=$n focus=0 relevel=1
-                    elif [[ ${_nodes_text[n]} != ${_commands[_nodes_cmd[n]]} ]]; then
-                        reveal=1           # titled: show the real command
-                    fi ;;
-            back)   if (( level )); then   # land on the group we came from
-                        focus=$level level=${_nodes_parent[level]} relevel=1
-                    fi ;;
-            run)    _cmd_picker_accept=1
-                    REPLY=$(( _nodes_cmd[n] - 1 )); break ;;
-            insert) REPLY=$(( _nodes_cmd[n] - 1 )); break ;;
-            cancel) REPLY=-1; break ;;
-        esac
-    done
-
-    # erase the table
-    (( drawn > 0 )) && printf '\e[%dA' $drawn > /dev/tty
-    printf '\e[J\e[?25h' > /dev/tty        # clear below + show cursor
+    } always {
+        # erase the table
+        (( drawn > 0 )) && printf '\e[%dA' $drawn > /dev/tty
+        printf '\e[J\e[?25h' > /dev/tty    # clear below + show cursor
+    }
 }
 
 _pick_command() {          # opened from _cycle_commands_down (ALT+DOWN)
