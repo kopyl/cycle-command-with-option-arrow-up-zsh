@@ -6,13 +6,17 @@
 #   ccusage --version                 # ccusage version
 #   npm install -g ccusage@latest     # install latest npm packages
 # Everything after the first " #" is the description and is never inserted
-# into the command line. Lines starting with # are ignored entirely.
+# into the command line. Lines starting with # are comments and are ignored.
 #
 # Groups: a line followed by more deeply indented lines (4 spaces or a tab
 # per level) becomes a group holding them; groups can be nested.
 #   MySQL
 #       autossh -M 3309 -Ng -L 3308:10.0.0.9:3306 me@example.com
-#       mysql -h 127.0.0.1 -P 3308 -u me ridesharing -A
+#       # Prod DB
+#           mysql -h 127.0.0.1 -P 3308 -u me ridesharing -A
+# Titles: a # line with a single, more deeply indented command under it names
+# that command ("Prod DB" above). The picker shows the title; → reveals the
+# real command. A # line with several lines under it is just a group.
 # The picker shows groups as folders (→/⏎ open, ←/esc back); ALT+Up/Down
 # cycle through every command, nested or not, in file order.
 
@@ -42,12 +46,22 @@ _load_commands() {
     _nodes_text=() _nodes_parent=() _nodes_cmd=() _cmd_node=()
     if [[ -f "$_commands_file" ]]; then
         local line lead tabs cmd desc i n
-        local -a texts descs widths
+        local -a texts descs widths titled
         # `|| [[ -n "$line" ]]` picks up a last line that has no trailing newline
         while IFS= read -r line || [[ -n "$line" ]]; do
             lead=${line%%[!$' \t']*}
+            tabs=${lead//[^$'\t']/}                 # a tab counts as 4 spaces
             _cmd_trim "$line"; line=$REPLY
-            [[ -z "$line" || "$line" == \#* ]] && continue
+            [[ -z "$line" ]] && continue
+            if [[ "$line" == \#* ]]; then           # title or plain comment
+                while [[ "$line" == \#* ]]; do line=${line#\#}; done
+                _cmd_trim "$line"
+                texts+=("$REPLY")
+                descs+=("")
+                widths+=($(( ${#lead} + 3 * ${#tabs} )))
+                titled+=(1)
+                continue
+            fi
             cmd=$line
             desc=""
             if [[ "$line" == *" #"* ]]; then
@@ -57,14 +71,28 @@ _load_commands() {
             fi
             _cmd_trim "$cmd"; cmd=$REPLY
             [[ -z "$cmd" ]] && continue
-            tabs=${lead//[^$'\t']/}                 # a tab counts as 4 spaces
             texts+=("$cmd")
             descs+=("$desc")
             widths+=($(( ${#lead} + 3 * ${#tabs} )))
+            titled+=(0)
         done < "$_commands_file"
 
+        # a # line is a title only when the next line is indented deeper;
+        # any other # line is a plain comment and is dropped here
+        local -a keep
+        for (( i = 1; i <= ${#texts}; i++ )); do
+            (( titled[i] && (i == ${#texts} || widths[i + 1] <= widths[i]) )) || keep+=($i)
+        done
+        local -a t2 d2 w2 h2
+        for i in $keep; do
+            t2+=("${texts[i]}") d2+=("${descs[i]}") w2+=(${widths[i]}) h2+=(${titled[i]})
+        done
+        texts=("${t2[@]}") descs=("${d2[@]}") widths=("${w2[@]}") titled=("${h2[@]}")
+
         # Python-style nesting: a line is a group when the next line is indented
-        # deeper; a stack of (indent, node) pairs tracks the open groups
+        # deeper; a stack of (indent, node) pairs tracks the open groups.
+        # A title holding exactly one command (nothing nested under it) names
+        # that command; a title holding more is just a group.
         local -a stackw=(-1) stackn=(0)
         for (( i = 1; i <= ${#texts}; i++ )); do
             while (( widths[i] <= ${stackw[-1]} )); do
@@ -73,7 +101,14 @@ _load_commands() {
             _nodes_text+=("${texts[i]}")
             _nodes_parent+=(${stackn[-1]})
             n=${#_nodes_text}
-            if (( i < ${#texts} && widths[i + 1] > widths[i] )); then
+            if (( titled[i] && !titled[i + 1] &&
+                  (i + 1 == ${#texts} || widths[i + 2] <= widths[i]) )); then
+                (( i++ ))                       # the command line is consumed
+                _commands+=("${texts[i]}")
+                _commands_desc+=("${descs[i]}")
+                _nodes_cmd+=(${#_commands})
+                _cmd_node+=($n)
+            elif (( i < ${#texts} && widths[i + 1] > widths[i] )); then
                 _nodes_cmd+=(0)
                 stackw+=(${widths[i]}) stackn+=($n)
             else
@@ -174,7 +209,7 @@ _cmd_picker_select() {
     local cols=${COLUMNS:-80} lines=${LINES:-24}
     local -a items
     local total sel top view cmdw maxcmd crumbs relevel=1
-    local i w n name drawn=0 key k2 k3 params act
+    local i w n name drawn=0 key k2 k3 params act reveal=0 color
     _cmd_picker_accept=0                   # 1 = run the command, 0 = only insert
     printf '\e[?25l' > /dev/tty            # hide cursor
 
@@ -220,7 +255,7 @@ _cmd_picker_select() {
 
             printf '\e[2K'
             [[ -n $crumbs ]] && printf ' \e[1;34m📁 %s\e[0m' "$crumbs"
-            printf '\e[2m  ↑/↓ move · ⏎ run · → open · ⌥⏎ insert · '
+            printf '\e[2m  ↑/↓ move · ⏎ run · → open/show · ⌥⏎ insert · '
             (( level )) && printf '← back' || printf 'esc cancel'
             (( total > view )) && printf '   (%d/%d)' $(( sel + 1 )) $total
             printf '\e[0m\n'
@@ -232,10 +267,18 @@ _cmd_picker_select() {
                 name=${_nodes_text[n]}
                 if (( _nodes_cmd[n] )); then
                     (( ${#name} > cmdw )) && name="${name[1,cmdw - 1]}…"
+                    color=""                            # titles are yellow
+                    [[ ${_nodes_text[n]} != ${_commands[_nodes_cmd[n]]} ]] && color=';33'
                     if (( i == sel )); then
-                        printf '\e[2K\e[7m %-*s \e[0m\n' $cmdw "$name"
+                        printf '\e[2K\e[7%sm %-*s \e[0m\n' "${color:+;1$color}" $cmdw "$name"
                     else
-                        printf '\e[2K \e[1m%-*s\e[0m\n' $cmdw "$name"
+                        printf '\e[2K \e[1%sm%-*s\e[0m\n' "$color" $cmdw "$name"
+                    fi
+                    if (( i == sel && reveal )); then   # → on a titled command
+                        name=${_commands[_nodes_cmd[n]]}
+                        (( ${#name} > cols - 6 )) && name="${name[1,cols - 7]}…"
+                        printf '\e[2K   \e[2m↳ %s\e[0m\n' "$name"
+                        (( drawn++ ))
                     fi
                 else
                     (( ${#name} > cmdw - 5 )) && name="${name[1,cmdw - 6]}…"
@@ -288,6 +331,11 @@ _cmd_picker_select() {
         esac
 
         n=${items[sel + 1]}
+        # a revealed command hides again on ← / esc and on any other key
+        if (( reveal )); then
+            reveal=0
+            [[ $act == (back|esc) ]] && continue
+        fi
         # on a group, ⏎ / ⌥⏎ open it like →
         [[ $act == (run|insert) ]] && (( _nodes_cmd[n] == 0 )) && act=open
         # esc steps out of a group, and only cancels at the top level
@@ -302,6 +350,8 @@ _cmd_picker_select() {
             end)    sel=$(( total - 1 )) ;;
             open)   if (( _nodes_cmd[n] == 0 )); then
                         level=$n focus=0 relevel=1
+                    elif [[ ${_nodes_text[n]} != ${_commands[_nodes_cmd[n]]} ]]; then
+                        reveal=1           # titled: show the real command
                     fi ;;
             back)   if (( level )); then   # land on the group we came from
                         focus=$level level=${_nodes_parent[level]} relevel=1
