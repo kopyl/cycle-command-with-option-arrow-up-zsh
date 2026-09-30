@@ -17,7 +17,8 @@
 # Titles: a # line with a single, more deeply indented command under it names
 # that command ("Prod DB" above). The picker shows the title; → reveals the
 # real command. A # line with several lines under it is just a group.
-# The picker shows groups as folders (→/⏎ open, ←/esc back); ALT+Up/Down
+# The picker shows groups as folders (→/⏎ open, ← back;
+# esc / ctrl-c, or ← at the top level, close the picker); ALT+Up/Down
 # cycle through every command, nested or not, in file order.
 
 _commands_file=".commands"
@@ -211,6 +212,12 @@ _cmd_picker_select() {
     local total sel top view cmdw maxcmd crumbs relevel=1
     local i w n name drawn=0 key k2 k3 params act reveal=0 color
     _cmd_picker_accept=0                   # 1 = run the command, 0 = only insert
+    # inside ZLE ctrl-c arrives as SIGINT, not as a \003 key; left alone it
+    # aborts the widget mid-draw, leaving the table up and the cursor hidden.
+    # Catch it here instead (the trap ends with the function) and close cleanly.
+    setopt localoptions localtraps
+    local interrupted=0
+    trap 'interrupted=1' INT
     printf '\e[?25l' > /dev/tty            # hide cursor
 
     while :; do
@@ -256,7 +263,8 @@ _cmd_picker_select() {
             printf '\e[2K'
             [[ -n $crumbs ]] && printf ' \e[1;34m📁 %s\e[0m' "$crumbs"
             printf '\e[2m  ↑/↓ move · ⏎ run · → open/show · ⌥⏎ insert · '
-            (( level )) && printf '← back' || printf 'esc cancel'
+            (( level )) && printf '← back · '
+            printf 'esc cancel'
             (( total > view )) && printf '   (%d/%d)' $(( sel + 1 )) $total
             printf '\e[0m\n'
             (( drawn++ ))
@@ -292,7 +300,11 @@ _cmd_picker_select() {
             done
         } > /dev/tty
 
-        IFS= read -rs -k 1 key < /dev/tty || { REPLY=-1; break; }
+        # a blocking read resumes after the trap, so poll to notice ctrl-c
+        until IFS= read -rs -k 1 -t 0.2 key < /dev/tty; do
+            (( interrupted )) && break
+        done
+        (( interrupted )) && { REPLY=-1; break; }         # ctrl-c
         act=""
         case $key in
             $'\n'|$'\r')  act=run ;;
@@ -303,7 +315,7 @@ _cmd_picker_select() {
             'q'|$'\003')  act=cancel ;;            # q / ctrl-c
             $'\e')
                 if ! IFS= read -rs -k 1 -t 0.05 k2 < /dev/tty; then
-                    act=esc                               # bare ESC
+                    act=cancel                            # bare ESC
                 # ALT+Return as "ESC then CR" -> insert without running
                 elif [[ $k2 == $'\r' || $k2 == $'\n' ]]; then
                     act=insert
@@ -331,15 +343,15 @@ _cmd_picker_select() {
         esac
 
         n=${items[sel + 1]}
-        # a revealed command hides again on ← / esc and on any other key
+        # a revealed command hides again on ← and on any other key
         if (( reveal )); then
             reveal=0
-            [[ $act == (back|esc) ]] && continue
+            [[ $act == back ]] && continue
         fi
         # on a group, ⏎ / ⌥⏎ open it like →
         [[ $act == (run|insert) ]] && (( _nodes_cmd[n] == 0 )) && act=open
-        # esc steps out of a group, and only cancels at the top level
-        [[ $act == esc ]] && { (( level )) && act=back || act=cancel; }
+        # ← steps out of a group, and only leaves the picker at the top level
+        [[ $act == back ]] && (( level == 0 )) && act=cancel
         case $act in
             up)     # Up on the top row of the top level leaves the picker
                     if (( sel > 0 )); then (( sel-- ))
