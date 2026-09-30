@@ -190,14 +190,16 @@ _cycle_commands_down() {   # ALT+DOWN
 # Picker
 # ---------------------------------------------------------------------------
 
-# Children of node $1 (0 = top level) into $reply, newest-first (the last line
-# of .commands at the top).
+# Children of node $1 (0 = top level) into $reply. The top level is shown
+# newest-first (the last line of .commands at the top); inside a group the
+# commands keep the order they are written in.
 _cmd_picker_items() {
     reply=()
     local n
-    for (( n = ${#_nodes_parent}; n >= 1; n-- )); do
+    for (( n = 1; n <= ${#_nodes_parent}; n++ )); do
         (( _nodes_parent[n] == $1 )) && reply+=($n)
     done
+    (( $1 == 0 )) && reply=("${(@Oa)reply}")
 }
 
 # Renders the table and returns the selected command index (0-based, into
