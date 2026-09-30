@@ -409,6 +409,13 @@ _down_or_pick() {          # DOWN
     fi
 }
 
+# A cycle lives only as long as the line being edited: once a line is run
+# (e.g. one inserted with ⌥⏎ and then run with a plain ⏎), the next prompt
+# starts fresh, so Down opens the picker instead of cycling on
+_commands_end_cycle() { _commands_index=${#_commands[@]}; }
+autoload -Uz add-zsh-hook
+add-zsh-hook precmd _commands_end_cycle
+
 zle -N _cycle_commands
 zle -N _cycle_commands_down
 zle -N _pick_command
