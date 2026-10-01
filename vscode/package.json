@@ -1,0 +1,39 @@
+{
+    "name": "commands-file",
+    "displayName": ".commands file",
+    "description": "Highlighting for .commands files (groups, titles and commands) used by .commands-cli",
+    "version": "0.1.1",
+    "publisher": "kopyl",
+    "license": "UNLICENSED",
+    "engines": { "vscode": "^1.75.0" },
+    "categories": ["Programming Languages"],
+    "main": "./extension.js",
+    "files": ["extension.js", "language-configuration.json", "syntaxes/"],
+    "activationEvents": ["onLanguage:commands"],
+    "contributes": {
+        "languages": [{
+            "id": "commands",
+            "aliases": [".commands", "commands"],
+            "filenames": [".commands"],
+            "configuration": "./language-configuration.json"
+        }],
+        "grammars": [{
+            "language": "commands",
+            "scopeName": "source.commands",
+            "path": "./syntaxes/commands.tmLanguage.json",
+            "embeddedLanguages": { "meta.command.commands": "shellscript" }
+        }],
+        "semanticTokenTypes": [
+            { "id": "commandGroup", "description": "A group of commands" },
+            { "id": "commandTitle", "description": "The title of a named command" }
+        ],
+        "semanticTokenScopes": [{
+            "language": "commands",
+            "scopes": {
+                "commandGroup": ["storage.type.group.commands"],
+                "commandTitle": ["meta.title.commands"],
+                "comment": ["comment.line.number-sign.commands"]
+            }
+        }]
+    }
+}
