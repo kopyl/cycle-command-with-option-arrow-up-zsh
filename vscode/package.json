@@ -2,7 +2,7 @@
     "name": "commands-file",
     "displayName": ".commands file",
     "description": "Highlighting for .commands files (groups, titles and commands) used by .commands-cli",
-    "version": "0.1.1",
+    "version": "0.1.2",
     "publisher": "kopyl",
     "license": "UNLICENSED",
     "engines": { "vscode": "^1.75.0" },
@@ -31,7 +31,7 @@
             "language": "commands",
             "scopes": {
                 "commandGroup": ["storage.type.group.commands"],
-                "commandTitle": ["meta.title.commands"],
+                "commandTitle": ["comment.line.number-sign.title.commands"],
                 "comment": ["comment.line.number-sign.commands"]
             }
         }]

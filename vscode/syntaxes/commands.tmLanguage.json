@@ -1,14 +1,12 @@
 {
     "name": ".commands",
     "scopeName": "source.commands",
-    "comment": "Line-based fallback: # lines are titles (plain text after a comment-coloured #), everything else is shell. Which # lines are titles and which lines are groups depends on the next line, so extension.js marks groups and turns plain comments back into comments with semantic tokens.",
+    "comment": "Line-based fallback: # lines (titles and comments alike) are comment-coloured, everything else is shell. Groups depend on the next line, so extension.js marks them with semantic tokens.",
     "patterns": [
         {
-            "match": "^\\s*(#+)(.*)$",
-            "captures": {
-                "1": { "name": "comment.line.number-sign.commands punctuation.definition.comment.commands" },
-                "2": { "name": "meta.title.commands" }
-            }
+            "name": "comment.line.number-sign.commands",
+            "match": "^\\s*(#+).*$",
+            "captures": { "1": { "name": "punctuation.definition.comment.commands" } }
         },
         {
             "name": "meta.command.commands",
