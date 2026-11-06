@@ -12,13 +12,21 @@ const GROUP = 0, TITLE = 1, COMMENT = 2;
 // colour (a title without its leading #s, a command without its " #" note).
 function parseLines(doc) {
     const entries = [];
+    let fence = false;                             // inside a ``` block
     for (let line = 0; line < doc.lineCount; line++) {
         const raw = doc.lineAt(line).text;
         const lead = raw.match(/^[ \t]*/)[0];
         const text = raw.slice(lead.length).trimEnd();
+        if (fence) {                               // the block is one command,
+            if (text.startsWith('```')) fence = false;   // left to the grammar
+            continue;
+        }
         if (!text) continue;
         const width = lead.length + 3 * (lead.split('\t').length - 1);
-        if (text.startsWith('#')) {
+        if (text.startsWith('```')) {              // opens a multi-line command
+            fence = true;
+            entries.push({ line, width, titled: false, start: lead.length, length: 0 });
+        } else if (text.startsWith('#')) {
             const title = text.replace(/^#+\s*/, '');
             entries.push({ line, width, titled: true, commentStart: lead.length,
                            commentLength: text.length,

@@ -20,6 +20,20 @@
 # The picker shows groups as folders (→/⏎ open, ← back;
 # esc / ctrl-c, or ← at the top level, close the picker); ALT+Up/Down
 # cycle through every command, nested or not, in file order.
+#
+# Multi-line commands: wrap them in ``` fences. The opening fence's indent
+# places the command in the tree (like any other line); everything up to the
+# closing ``` is taken verbatim (dedented, no " #" notes, no nesting), so
+# backslash continuations, loops, heredocs and # comments all work. A " #"
+# note after the opening fence is the description; text right after ``` (a
+# language tag) is ignored.
+#       # all resources
+#           ```
+#             autossh -N me@example.com \
+#               -L 3308:10.0.0.9:3306 \
+#               -L 6379:10.0.0.4:6379
+#           ```
+# The picker shows the first line followed by "…"; → reveals the whole command.
 
 _commands_file=".commands"
 _commands=()               # every command, flat, in file order
@@ -30,6 +44,7 @@ _commands_index=0
 _nodes_text=()
 _nodes_parent=()
 _nodes_cmd=()
+_nodes_titled=()           # 1 = the node shows a # title, not its command
 _cmd_node=()               # _commands index -> node index
 _cmd_log() { echo "[$(date '+%H:%M:%S')] $1" >> ~/.command-logs; }
 
@@ -40,20 +55,70 @@ _cmd_trim() {  # trims leading/trailing whitespace of $1 into REPLY
     REPLY=$s
 }
 
+# Joins the lines of a ``` block ($@) into REPLY: drops blank lines at both
+# ends and trailing whitespace, and removes the indent the lines share.
+_cmd_dedent() {
+    local -a out=("$@")
+    local l ind min=-1 i
+    while (( ${#out} )) && [[ -z ${out[1]//[$' \t']/} ]]; do out[1]=(); done
+    while (( ${#out} )) && [[ -z ${out[-1]//[$' \t']/} ]]; do out[-1]=(); done
+    for l in "${out[@]}"; do
+        [[ -z ${l//[$' \t']/} ]] && continue
+        ind=${l%%[!$' \t']*}
+        (( min < 0 || ${#ind} < min )) && min=${#ind}
+    done
+    for (( i = 1; i <= ${#out}; i++ )); do
+        l=${out[i]%"${out[i]##*[!$' \t']}"}
+        out[i]=${l:$min}
+    done
+    REPLY=${(pj:\n:)out}
+}
+
+# One-line picker label for a command: a multi-line one shows its first line
+# (without a trailing backslash) and "…"
+_cmd_label() {
+    REPLY=$1
+    [[ $1 == *$'\n'* ]] || return
+    _cmd_trim "${${1%%$'\n'*}%\\}"
+    REPLY="$REPLY …"
+}
+
 _load_commands() {
     _commands=()
     _commands_desc=()
     _commands_index=0
-    _nodes_text=() _nodes_parent=() _nodes_cmd=() _cmd_node=()
+    _nodes_text=() _nodes_parent=() _nodes_cmd=() _nodes_titled=() _cmd_node=()
     if [[ -f "$_commands_file" ]]; then
-        local line lead tabs cmd desc i n
-        local -a texts descs widths titled
+        local line lead tabs cmd desc i n infence=0 fwidth fdesc
+        local -a texts descs widths titled body
         # `|| [[ -n "$line" ]]` picks up a last line that has no trailing newline
         while IFS= read -r line || [[ -n "$line" ]]; do
+            if (( infence )); then                  # inside a ``` block
+                _cmd_trim "$line"
+                if [[ $REPLY == '```'* ]]; then
+                    infence=0
+                    _cmd_dedent "${body[@]}"
+                    if [[ -n $REPLY ]]; then
+                        texts+=("$REPLY") descs+=("$fdesc")
+                        widths+=($fwidth) titled+=(0)
+                    fi
+                else
+                    body+=("$line")
+                fi
+                continue
+            fi
             lead=${line%%[!$' \t']*}
             tabs=${lead//[^$'\t']/}                 # a tab counts as 4 spaces
             _cmd_trim "$line"; line=$REPLY
             [[ -z "$line" ]] && continue
+            if [[ "$line" == '```'* ]]; then        # opens a multi-line command
+                infence=1 body=() fdesc=""
+                fwidth=$(( ${#lead} + 3 * ${#tabs} ))
+                if [[ "$line" == *" #"* ]]; then
+                    _cmd_trim "${line#* #}"; fdesc=$REPLY
+                fi
+                continue
+            fi
             if [[ "$line" == \#* ]]; then           # title or plain comment
                 while [[ "$line" == \#* ]]; do line=${line#\#}; done
                 _cmd_trim "$line"
@@ -77,6 +142,12 @@ _load_commands() {
             widths+=($(( ${#lead} + 3 * ${#tabs} )))
             titled+=(0)
         done < "$_commands_file"
+        if (( infence )); then                      # unclosed ``` runs to the end
+            _cmd_dedent "${body[@]}"
+            if [[ -n $REPLY ]]; then
+                texts+=("$REPLY") descs+=("$fdesc") widths+=($fwidth) titled+=(0)
+            fi
+        fi
 
         # a # line is a title only when the next line is indented deeper;
         # any other # line is a plain comment and is dropped here
@@ -99,11 +170,14 @@ _load_commands() {
             while (( widths[i] <= ${stackw[-1]} )); do
                 stackw[-1]=() stackn[-1]=()
             done
-            _nodes_text+=("${texts[i]}")
+            _cmd_label "${texts[i]}"
+            _nodes_text+=("$REPLY")
             _nodes_parent+=(${stackn[-1]})
+            _nodes_titled+=(0)
             n=${#_nodes_text}
             if (( titled[i] && !titled[i + 1] &&
                   (i + 1 == ${#texts} || widths[i + 2] <= widths[i]) )); then
+                _nodes_titled[n]=1
                 (( i++ ))                       # the command line is consumed
                 _commands+=("${texts[i]}")
                 _commands_desc+=("${descs[i]}")
@@ -212,7 +286,8 @@ _cmd_picker_select() {
     local cols=${COLUMNS:-80} lines=${LINES:-24}
     local -a items
     local total sel top view cmdw maxcmd crumbs relevel=1
-    local i w n name drawn=0 key k2 k3 params act reveal=0 color
+    local i w n name drawn=0 key k2 k3 params act reveal=0 color vis room
+    local -a rlines
     _cmd_picker_accept=0                   # 1 = run the command, 0 = only insert
     # inside ZLE ctrl-c arrives as SIGINT, not as a \003 key; left alone it
     # aborts the widget mid-draw, leaving the table up and the cursor hidden.
@@ -254,8 +329,22 @@ _cmd_picker_select() {
                 done
             fi
 
+            # a revealed command gets its own lines under the row; a long one
+            # shrinks the list (header + rows + reveal stay within lines - 2)
+            vis=$view rlines=()
+            if (( reveal )); then
+                rlines=("${(@f)_commands[_nodes_cmd[items[sel + 1]]]}")
+                room=$(( lines - 3 ))
+                (( vis > room - ${#rlines} )) && vis=$(( room - ${#rlines} ))
+                (( vis < 1 )) && vis=1
+                if (( ${#rlines} > room - vis )); then
+                    i=$(( room - vis )); (( i < 1 )) && i=1
+                    rlines=("${(@)rlines[1,i]}"); rlines[-1]+=" …"
+                fi
+            fi
+
             (( sel < top )) && top=$sel
-            (( sel > top + view - 1 )) && top=$(( sel - view + 1 ))
+            (( sel > top + vis - 1 )) && top=$(( sel - vis + 1 ))
 
             {
                 # back to the header, clearing leftovers of a longer previous level
@@ -273,23 +362,26 @@ _cmd_picker_select() {
                 (( drawn++ ))
 
                 # descriptions are still parsed into _commands_desc, just not shown
-                for (( i = top; i < top + view; i++ )); do
+                for (( i = top; i < top + vis; i++ )); do
                     n=${items[i + 1]}
                     name=${_nodes_text[n]}
                     if (( _nodes_cmd[n] )); then
                         (( ${#name} > cmdw )) && name="${name[1,cmdw - 1]}…"
                         color=""                            # titles are yellow
-                        [[ ${_nodes_text[n]} != ${_commands[_nodes_cmd[n]]} ]] && color=';33'
+                        (( _nodes_titled[n] )) && color=';33'
                         if (( i == sel )); then
                             printf '\e[2K\e[7%sm %-*s \e[0m\n' "${color:+;1$color}" $cmdw "$name"
                         else
                             printf '\e[2K \e[1%sm%-*s\e[0m\n' "$color" $cmdw "$name"
                         fi
-                        if (( i == sel && reveal )); then   # → on a titled command
-                            name=${_commands[_nodes_cmd[n]]}
-                            (( ${#name} > cols - 6 )) && name="${name[1,cols - 7]}…"
-                            printf '\e[2K   \e[2m↳ %s\e[0m\n' "$name"
-                            (( drawn++ ))
+                        if (( i == sel && reveal )); then   # → on a titled or
+                            w='↳'                           # multi-line command
+                            for name in "${rlines[@]}"; do
+                                (( ${#name} > cols - 6 )) && name="${name[1,cols - 7]}…"
+                                printf '\e[2K   \e[2m%s %s\e[0m\n' "$w" "$name"
+                                w=' '
+                                (( drawn++ ))
+                            done
                         fi
                     else
                         (( ${#name} > cmdw - 5 )) && name="${name[1,cmdw - 6]}…"

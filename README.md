@@ -11,6 +11,7 @@
 | Group names (a line with deeper-indented lines under it) | type keyword, blue in Dark+ |
 | Titles (`# Title` with a single deeper-indented command under it) | comment, the whole line including `#` (green in Dark+) |
 | Commands | shell, using VS Code's built-in shell grammar |
+| Multi-line commands (between ```` ``` ```` fences) | shell; the whole block is one command |
 | Plain `#` comments and ` # notes` after a command | comment |
 
 Whether a line is a group or a title depends on the lines after it, which a TextMate grammar can't see, so `vscode/extension.js` works that out with a semantic token provider that follows the same rules as `_load_commands` in `.commands-cli`. **If you change the `.commands` syntax, update both.**
@@ -22,7 +23,7 @@ Groups need semantic highlighting, which most themes turn on. Without it they sh
 ```sh
 cd vscode
 npx @vscode/vsce package --allow-missing-repository --skip-license
-code --install-extension commands-file-0.1.2.vsix
+code --install-extension commands-file-0.1.3.vsix
 ```
 
 Then reload the window (⌘⇧P → *Developer: Reload Window*). Any file named `.commands` opens with the `.commands` language.

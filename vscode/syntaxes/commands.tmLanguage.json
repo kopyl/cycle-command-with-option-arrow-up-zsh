@@ -4,6 +4,19 @@
     "comment": "Line-based fallback: # lines (titles and comments alike) are comment-coloured, everything else is shell. Groups depend on the next line, so extension.js marks them with semantic tokens.",
     "patterns": [
         {
+            "comment": "A ``` block is one multi-line command: shell inside, fences (and a # note after the opening one) as punctuation/comment.",
+            "name": "meta.fenced.commands",
+            "begin": "^\\s*(```)[^#]*(#.*)?$",
+            "beginCaptures": {
+                "1": { "name": "punctuation.definition.fence.commands" },
+                "2": { "name": "comment.line.number-sign.commands" }
+            },
+            "end": "^\\s*(```).*$",
+            "endCaptures": { "1": { "name": "punctuation.definition.fence.commands" } },
+            "contentName": "meta.command.commands",
+            "patterns": [{ "include": "source.shell" }]
+        },
+        {
             "name": "comment.line.number-sign.commands",
             "match": "^\\s*(#+).*$",
             "captures": { "1": { "name": "punctuation.definition.comment.commands" } }
