@@ -35,11 +35,15 @@
 #           ```
 # The picker shows the first line followed by "…"; → reveals the whole command.
 #
-# Commands that need an argument: end the command with <input>.
+# Commands that need an argument: put <input> where it goes (start, middle
+# or end).
 #   unfairplay decrypt --strip-account-data --input <input>
-# It is put on the line without <input> (ending with the space before it),
-# cursor at the end, and is never run straight away: in the picker ⏎ inserts
-# it just like ⌥⏎. The picker still shows the <input> part.
+#   <input> | jq .
+#   curl <input> -o out.json
+# It is put on the line without <input>, cursor where <input> was, and is
+# never run straight away: in the picker ⏎ inserts it just like ⌥⏎. The
+# picker still shows the <input> part. Only the first <input> is handled;
+# any later ones stay as literal text.
 
 _commands_file=".commands"
 _commands=()               # every command, flat, in file order
@@ -208,16 +212,19 @@ _load_commands() {
 zmodload -F zsh/stat b:zstat 2>/dev/null
 
 # Puts command $1 (0-based index into _commands) on the line, cursor at the
-# end. A command ending in <input> goes in without it; REPLY=1 for those
-# (the user still has to type the argument), else REPLY=0.
+# end. A command containing <input> goes in without it (the first one only),
+# cursor where it was; REPLY=1 for those (the user still has to type the
+# argument), else REPLY=0.
 _cmd_put() {
     BUFFER=${_commands[$1 + 1]}
+    CURSOR=${#BUFFER}
     REPLY=0
-    if [[ $BUFFER == *'<input>' ]]; then
-        BUFFER=${BUFFER%'<input>'}
+    if [[ $BUFFER == *'<input>'* ]]; then
+        local pre=${BUFFER%%'<input>'*}
+        BUFFER=$pre${BUFFER#*'<input>'}
+        CURSOR=${#pre}
         REPLY=1
     fi
-    CURSOR=${#BUFFER}
 }
 
 _commands_mtime=0
@@ -373,7 +380,7 @@ _cmd_picker_select() {
                 [[ -n $crumbs ]] && printf ' \e[1;34m📁 %s\e[0m' "$crumbs"
                 # on a command that waits for its <input>, ⏎ only inserts it
                 n=${items[sel + 1]}
-                if (( _nodes_cmd[n] )) && [[ ${_commands[_nodes_cmd[n]]} == *'<input>' ]]; then
+                if (( _nodes_cmd[n] )) && [[ ${_commands[_nodes_cmd[n]]} == *'<input>'* ]]; then
                     printf '\e[2m  ↑/↓ move · ⏎ insert · → open/show · '
                 else
                     printf '\e[2m  ↑/↓ move · ⏎ run · → open/show · ⌥⏎ insert · '
