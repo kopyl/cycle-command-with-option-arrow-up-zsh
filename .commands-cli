@@ -227,16 +227,20 @@ _cmd_put() {
     fi
 }
 
-_commands_mtime=0
+# The loaded list is keyed by the file's absolute path + mtime, so a cd to
+# another directory (with a different .commands, or none at all) reloads it;
+# an empty key (no file here) clears the list left over from the last one.
+_commands_key=""
 _maybe_reload_commands() {
     local -a st
-    if [[ -f "$_commands_file" ]]; then
-        zstat -A st +mtime "$_commands_file" 2>/dev/null || return
-        if [[ "$st[1]" != "$_commands_mtime" ]]; then
-            _load_commands
-            _commands_mtime="$st[1]"
-            _commands_index=${#_commands[@]}
-        fi
+    local key=""
+    if [[ -f "$_commands_file" ]] && zstat -A st +mtime -- "$_commands_file" 2>/dev/null; then
+        key="${_commands_file:A}:$st[1]"
+    fi
+    if [[ "$key" != "$_commands_key" ]]; then
+        _load_commands
+        _commands_key=$key
+        _commands_index=${#_commands[@]}
     fi
 }
 
