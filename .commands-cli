@@ -34,6 +34,12 @@
 #               -L 6379:10.0.0.4:6379
 #           ```
 # The picker shows the first line followed by "…"; → reveals the whole command.
+#
+# Commands that need an argument: end the command with <input>.
+#   unfairplay decrypt --strip-account-data --input <input>
+# It is put on the line without <input> (ending with the space before it),
+# cursor at the end, and is never run straight away: in the picker ⏎ inserts
+# it just like ⌥⏎. The picker still shows the <input> part.
 
 _commands_file=".commands"
 _commands=()               # every command, flat, in file order
@@ -201,6 +207,19 @@ _load_commands() {
 # is the same on macOS (BSD) and Linux (GNU coreutils)
 zmodload -F zsh/stat b:zstat 2>/dev/null
 
+# Puts command $1 (0-based index into _commands) on the line, cursor at the
+# end. A command ending in <input> goes in without it; REPLY=1 for those
+# (the user still has to type the argument), else REPLY=0.
+_cmd_put() {
+    BUFFER=${_commands[$1 + 1]}
+    REPLY=0
+    if [[ $BUFFER == *'<input>' ]]; then
+        BUFFER=${BUFFER%'<input>'}
+        REPLY=1
+    fi
+    CURSOR=${#BUFFER}
+}
+
 _commands_mtime=0
 _maybe_reload_commands() {
     local -a st
@@ -234,8 +253,7 @@ _cycle_commands() {        # ALT+UP
     fi
     if [[ $_commands_index -gt 0 ]]; then
         _commands_index=$(( _commands_index - 1 ))
-        BUFFER="${_commands[$(( _commands_index + 1 ))]}"
-        CURSOR=${#BUFFER}
+        _cmd_put $_commands_index
     fi
 }
 
@@ -251,8 +269,7 @@ _cycle_commands_down() {   # ALT+DOWN
     fi
     if [[ $_commands_index -lt $(( ${#_commands[@]} - 1 )) ]]; then
         _commands_index=$(( _commands_index + 1 ))
-        BUFFER="${_commands[$(( _commands_index + 1 ))]}"
-        CURSOR=${#BUFFER}
+        _cmd_put $_commands_index
     else
         _commands_index=${#_commands[@]}
         BUFFER=""
@@ -354,7 +371,13 @@ _cmd_picker_select() {
 
                 printf '\e[2K'
                 [[ -n $crumbs ]] && printf ' \e[1;34m📁 %s\e[0m' "$crumbs"
-                printf '\e[2m  ↑/↓ move · ⏎ run · → open/show · ⌥⏎ insert · '
+                # on a command that waits for its <input>, ⏎ only inserts it
+                n=${items[sel + 1]}
+                if (( _nodes_cmd[n] )) && [[ ${_commands[_nodes_cmd[n]]} == *'<input>' ]]; then
+                    printf '\e[2m  ↑/↓ move · ⏎ insert · → open/show · '
+                else
+                    printf '\e[2m  ↑/↓ move · ⏎ run · → open/show · ⌥⏎ insert · '
+                fi
                 (( level )) && printf '← back · '
                 printf 'esc cancel'
                 (( total > view )) && printf '   (%d/%d)' $(( sel + 1 )) $total
@@ -488,9 +511,9 @@ _pick_command() {          # opened from _cycle_commands_down (ALT+DOWN)
 
     if (( picked >= 0 )); then
         _commands_index=$picked
-        BUFFER="${_commands[picked + 1]}"
-        CURSOR=${#BUFFER}
-        if (( _cmd_picker_accept )); then
+        _cmd_put $picked
+        # a command waiting for its <input> is only inserted, even on ⏎
+        if (( _cmd_picker_accept && ! REPLY )); then
             _commands_index=${#_commands[@]}   # selection ends the cycle
             zle accept-line
             return
