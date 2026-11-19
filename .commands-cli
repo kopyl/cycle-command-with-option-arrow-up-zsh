@@ -1,4 +1,6 @@
 # --- ALT+Up / ALT+Down: cycle through lines of a local .commands file (zsh ZLE) ---
+# --- plus ~/.commands.global (or $COMMANDS_GLOBAL_FILE), offered in every
+#     directory: in the picker under a "Global" folder at the bottom ---
 # --- Down (on an untouched prompt) or ALT+Down with nothing left to cycle
 #     down to: pick a command from a list ---
 #
@@ -46,6 +48,8 @@
 # any later ones stay as literal text.
 
 _commands_file=".commands"
+# shown in every directory next to the local .commands
+_commands_global_file=${COMMANDS_GLOBAL_FILE:-$HOME/.commands.global}
 _commands=()               # every command, flat, in file order
 _commands_desc=()
 _commands_index=0
@@ -54,7 +58,8 @@ _commands_index=0
 _nodes_text=()
 _nodes_parent=()
 _nodes_cmd=()
-_nodes_titled=()           # 1 = the node shows a # title, not its command
+_nodes_titled=()
+_commands_global_node=0    # the "Global" group node, 0 when there is none           # 1 = the node shows a # title, not its command
 _cmd_node=()               # _commands index -> node index
 _cmd_log() { echo "[$(date '+%H:%M:%S')] $1" >> ~/.command-logs; }
 
@@ -93,12 +98,11 @@ _cmd_label() {
     REPLY="$REPLY …"
 }
 
-_load_commands() {
-    _commands=()
-    _commands_desc=()
-    _commands_index=0
-    _nodes_text=() _nodes_parent=() _nodes_cmd=() _nodes_titled=() _cmd_node=()
-    if [[ -f "$_commands_file" ]]; then
+# Parses file $1 and appends its commands and nodes; its top-level lines go
+# under node $2 (0 = the picker's top level).
+_load_commands_file() {
+    local file=$1 root=${2:-0}
+    if [[ -f "$file" ]]; then
         local line lead tabs cmd desc i n infence=0 fwidth fdesc
         local -a texts descs widths titled body
         # `|| [[ -n "$line" ]]` picks up a last line that has no trailing newline
@@ -151,7 +155,7 @@ _load_commands() {
             descs+=("$desc")
             widths+=($(( ${#lead} + 3 * ${#tabs} )))
             titled+=(0)
-        done < "$_commands_file"
+        done < "$file"
         if (( infence )); then                      # unclosed ``` runs to the end
             _cmd_dedent "${body[@]}"
             if [[ -n $REPLY ]]; then
@@ -175,7 +179,7 @@ _load_commands() {
         # deeper; a stack of (indent, node) pairs tracks the open groups.
         # A title holding exactly one command (nothing nested under it) names
         # that command; a title holding more is just a group.
-        local -a stackw=(-1) stackn=(0)
+        local -a stackw=(-1) stackn=($root)
         for (( i = 1; i <= ${#texts}; i++ )); do
             while (( widths[i] <= ${stackw[-1]} )); do
                 stackw[-1]=() stackn[-1]=()
@@ -204,6 +208,39 @@ _load_commands() {
             fi
         done
     fi
+}
+
+# Loads the global file, then the local one, so ⌥↑ starts on the last local
+# command. With both present the global commands sit in a "Global" group
+# (bottom of the picker, as it is the first top-level node); with no local
+# commands they are shown at the top level as they are.
+_load_commands() {
+    _commands=()
+    _commands_desc=()
+    _commands_index=0
+    _nodes_text=() _nodes_parent=() _nodes_cmd=() _nodes_titled=() _cmd_node=()
+    local g=0 n
+    _commands_global_node=0
+    if [[ -f "$_commands_global_file" && "${_commands_global_file:A}" != "${_commands_file:A}" ]]; then
+        _nodes_text+=("Global") _nodes_parent+=(0) _nodes_cmd+=(0) _nodes_titled+=(0)
+        g=${#_nodes_text}
+        _load_commands_file "$_commands_global_file" $g
+        if (( ${#_nodes_text} == g )); then     # nothing in it: drop the group
+            _nodes_text[g]=() _nodes_parent[g]=() _nodes_cmd[g]=() _nodes_titled[g]=()
+            g=0
+        fi
+    fi
+    _commands_global_node=$g
+    local before=${#_nodes_text}
+    _load_commands_file "$_commands_file" 0
+    if (( g && ${#_nodes_text} == before )); then
+        # no local commands: unwrap the group (it is left orphaned, never shown)
+        for (( n = g + 1; n <= before; n++ )); do
+            (( _nodes_parent[n] == g )) && _nodes_parent[n]=0
+        done
+        _nodes_parent[g]=-1
+        _commands_global_node=0
+    fi
     _cmd_log "load_commands: count=${#_commands[@]} index=$_commands_index"
 }
 
@@ -227,16 +264,18 @@ _cmd_put() {
     fi
 }
 
-# The loaded list is keyed by the file's absolute path + mtime, so a cd to
-# another directory (with a different .commands, or none at all) reloads it;
-# an empty key (no file here) clears the list left over from the last one.
+# The loaded list is keyed by both files' absolute paths + mtimes, so a cd to
+# another directory (with a different .commands, or none at all) or an edit of
+# either file reloads it; an empty key (no files) clears the leftover list.
 _commands_key=""
 _maybe_reload_commands() {
     local -a st
-    local key=""
-    if [[ -f "$_commands_file" ]] && zstat -A st +mtime -- "$_commands_file" 2>/dev/null; then
-        key="${_commands_file:A}:$st[1]"
-    fi
+    local key="" f
+    for f in "$_commands_global_file" "$_commands_file"; do
+        if [[ -f "$f" ]] && zstat -A st +mtime -- "$f" 2>/dev/null; then
+            key+="${f:A}:$st[1];"
+        fi
+    done
     if [[ "$key" != "$_commands_key" ]]; then
         _load_commands
         _commands_key=$key
@@ -292,16 +331,17 @@ _cycle_commands_down() {   # ALT+DOWN
 # Picker
 # ---------------------------------------------------------------------------
 
-# Children of node $1 (0 = top level) into $reply. The top level is shown
-# newest-first (the last line of .commands at the top); inside a group the
-# commands keep the order they are written in.
+# Children of node $1 (0 = top level) into $reply. The top level, and the top
+# level of the global file inside the "Global" group, are shown newest-first
+# (the file's last line at the top); inside any other group the commands keep
+# the order they are written in.
 _cmd_picker_items() {
     reply=()
     local n
     for (( n = 1; n <= ${#_nodes_parent}; n++ )); do
         (( _nodes_parent[n] == $1 )) && reply+=($n)
     done
-    (( $1 == 0 )) && reply=("${(@Oa)reply}")
+    (( $1 == 0 || $1 == _commands_global_node )) && reply=("${(@Oa)reply}")
 }
 
 # Renders the table and returns the selected command index (0-based, into

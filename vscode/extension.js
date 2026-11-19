@@ -1,7 +1,7 @@
 // Semantic highlighting for .commands files. Whether a line is a group or a
 // # line is a title depends on the lines after it, which a TextMate grammar
 // cannot see, so the structure is worked out here with the same rules as
-// _load_commands in .commands-cli.
+// _load_commands_file in .commands-cli.
 const vscode = require('vscode');
 
 const legend = new vscode.SemanticTokensLegend(['commandGroup', 'commandTitle', 'comment']);
